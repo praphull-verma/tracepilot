@@ -1,0 +1,305 @@
+// This is your Prisma schema file
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  role      String   @default("sales_rep")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Lead {
+  id                   String    @id @default(cuid())
+  externalId           String    @unique
+  name                 String
+  company              String
+  email                String?
+  phone                String?
+  jobTitle             String?
+  industry             String?
+  companySize          Int?
+  source               String?
+  leadScore            Float     @default(0)
+  status               String    @default("NEW")
+  estimatedDealValue   Float?
+  createdAt            DateTime  @default(now())
+  lastContactedAt      DateTime?
+  lastActivityAt       DateTime?
+  assignedTo           String?
+  conversionProbability Float?
+  location             String?
+  metadata             Json?
+  updatedAt            DateTime  @updatedAt
+
+  deals        Deal[]
+  interactions Interaction[]
+  notes        BusinessNote[] @relation("LeadNotes")
+
+  @@index([status])
+  @@index([leadScore])
+  @@index([lastContactedAt])
+  @@index([lastActivityAt])
+  @@index([company])
+  @@map("leads")
+}
+
+model Customer {
+  id                String    @id @default(cuid())
+  externalId        String    @unique
+  company           String
+  industry          String?
+  size              String?
+  status            String    @default("ACTIVE")
+  lifetimeValue     Float?
+  createdAt         DateTime  @default(now())
+  lastInteractionAt DateTime?
+  updatedAt         DateTime  @updatedAt
+
+  deals        Deal[]
+  interactions Interaction[]
+  notes        BusinessNote[] @relation("CustomerNotes")
+
+  @@index([status])
+  @@map("customers")
+}
+
+model Deal {
+  id               String    @id @default(cuid())
+  externalId       String    @unique
+  leadId           String?
+  customerId       String?
+  name             String
+  stage            String    @default("PROSPECTING")
+  value            Float
+  probability      Float?
+  expectedCloseDate DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  lead     Lead?     @relation(fields: [leadId], references: [id])
+  customer Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([stage])
+  @@index([expectedCloseDate])
+  @@map("deals")
+}
+
+model Interaction {
+  id         String   @id @default(cuid())
+  leadId     String?
+  customerId String?
+  type       String
+  direction  String?
+  subject    String?
+  summary    String?
+  timestamp  DateTime @default(now())
+  sentiment  String?
+  outcome    String?
+
+  lead     Lead?     @relation(fields: [leadId], references: [id])
+  customer Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([timestamp])
+  @@map("interactions")
+}
+
+model BusinessNote {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  title      String?
+  content    String
+  author     String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  source     String?
+
+  lead     Lead?     @relation("LeadNotes", fields: [leadId], references: [id])
+  leadId   String?
+  customer Customer? @relation("CustomerNotes", fields: [customerId], references: [id])
+  customerId String?
+
+  @@index([entityId])
+  @@map("business_notes")
+}
+
+model EmbeddingDocument {
+  id         String   @id @default(cuid())
+  sourceType String
+  sourceId   String
+  text       String
+  embedding  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([sourceType])
+  @@index([sourceId])
+  @@map("embedding_documents")
+}
+
+model Decision {
+  id             String   @id @default(cuid())
+  requestId      String
+  query          String
+  entityType     String?
+  entityId       String?
+  rank           Int?
+  score          Float?
+  recommendation String?
+  rationale      String?
+  confidence     Float?
+  createdAt      DateTime @default(now())
+
+  evidence  Evidence[]
+  approvals Approval[]
+
+  @@index([requestId])
+  @@map("decisions")
+}
+
+model Evidence {
+  id          String   @id @default(cuid())
+  decisionId  String
+  sourceType  String
+  sourceId    String
+  field       String?
+  value       String?
+  explanation String?
+  freshness   String?
+  createdAt   DateTime @default(now())
+
+  decision Decision @relation(fields: [decisionId], references: [id])
+
+  @@map("evidence")
+}
+
+model Approval {
+  id         String    @id @default(cuid())
+  decisionId String
+  status     String    @default("PENDING")
+  approvedBy String?
+  comment    String?
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  decision Decision @relation(fields: [decisionId], references: [id])
+
+  @@map("approvals")
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  requestId String?
+  eventType String
+  actor     String?
+  payload   Json?
+  timestamp DateTime @default(now())
+  status    String?
+
+  @@index([requestId])
+  @@index([timestamp])
+  @@map("audit_events")
+}
+
+model TraceEvent {
+  id        String   @id @default(cuid())
+  requestId String
+  eventType String
+  component String?
+  input     Json?
+  output    Json?
+  duration  Int?
+  status    String?
+  error     String?
+  metadata  Json?
+  timestamp DateTime @default(now())
+
+  @@index([requestId])
+  @@map("trace_events")
+}
+
+model EvaluationRun {
+  id                   String           @id @default(cuid())
+  name                 String
+  totalQueries         Int              @default(0)
+  correctAnswers       Int              @default(0)
+  accuracy             Float?
+  evidenceCoverage     Float?
+  unsupportedAnswerRate Float?
+  averageLatency       Float?
+  routeAccuracy        Float?
+  createdAt            DateTime         @default(now())
+
+  cases EvaluationResult[]
+
+  @@map("evaluation_runs")
+}
+
+model EvaluationCase {
+  id               String @id @default(cuid())
+  question         String
+  expectedAnswer   String?
+  expectedEntities Json?
+  expectedDecision String?
+  expectedEvidence Json?
+  expectedRoute    String?
+  category         String?
+  difficulty       String?
+
+  results EvaluationResult[]
+
+  @@map("evaluation_cases")
+}
+
+model EvaluationResult {
+  id              String   @id @default(cuid())
+  runId           String
+  caseId          String
+  actualAnswer    String?
+  actualRoute     String?
+  actualEntities  Json?
+  isCorrect       Boolean?
+  routeCorrect    Boolean?
+  evidenceCoverage Float?
+  latency         Int?
+  error           String?
+  createdAt       DateTime @default(now())
+
+  run  EvaluationRun  @relation(fields: [runId], references: [id])
+  case EvaluationCase @relation(fields: [caseId], references: [id])
+
+  @@map("evaluation_results")
+}
+
+model DataSource {
+  id            String   @id @default(cuid())
+  name          String
+  type          String
+  fileName      String?
+  rowCount      Int?
+  qualityScore  Float?
+  duplicates    Int?
+  missingValues Int?
+  staleness     Float?
+  indexed       Boolean  @default(false)
+  status        String   @default("PENDING")
+  schema        Json?
+  metadata      Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("data_sources")
+}

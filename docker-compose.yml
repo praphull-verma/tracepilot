@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: tracepilot-postgres
+    environment:
+      POSTGRES_USER: tracepilot
+      POSTGRES_PASSWORD: tracepilot
+      POSTGRES_DB: tracepilot
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U tracepilot']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: ../../docker/api.Dockerfile
+    container_name: tracepilot-api
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      DATABASE_URL: postgresql://tracepilot:tracepilot@postgres:5432/tracepilot
+      DEMO_MODE: 'true'
+      LLM_PROVIDER: mock
+      FRONTEND_URL: http://localhost:5173
+    ports:
+      - '5000:5000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: ../../docker/web.Dockerfile
+    container_name: tracepilot-web
+    ports:
+      - '5173:80'
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  uploads:

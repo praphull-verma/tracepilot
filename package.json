@@ -1,0 +1,20 @@
+{
+  "name": "tracepilot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Evidence-backed sales decisions from scattered business data",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace=apps/api\" \"npm run dev --workspace=apps/web\"",
+    "build": "npm run build --workspace=apps/api && npm run build --workspace=apps/web",
+    "seed": "npm run seed --workspace=apps/api",
+    "migrate": "npm run migrate --workspace=apps/api",
+    "test": "npm run test --workspace=apps/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

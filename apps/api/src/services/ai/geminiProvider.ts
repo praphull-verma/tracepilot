@@ -85,6 +85,9 @@ export class GeminiProvider implements LLMProvider {
       model: config.llm.embeddingModel,
       contents: text,
     });
+    if (!response.embeddings || response.embeddings.length === 0 || !response.embeddings[0].values) {
+      throw new Error('No embeddings returned from Gemini');
+    }
     return response.embeddings[0].values;
   }
 
@@ -97,6 +100,9 @@ export class GeminiProvider implements LLMProvider {
         model: config.llm.embeddingModel,
         contents: text,
       });
+      if (!response.embeddings || response.embeddings.length === 0 || !response.embeddings[0].values) {
+        throw new Error('No embeddings returned from Gemini');
+      }
       results.push(response.embeddings[0].values);
     }
     return results;

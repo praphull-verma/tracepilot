@@ -133,6 +133,8 @@ model BusinessNote {
   customerId String?
 
   @@index([entityId])
+  // index leadId so per-lead note retrieval avoids full scan
+  @@index([leadId])
   @@map("business_notes")
 }
 
@@ -141,7 +143,8 @@ model EmbeddingDocument {
   sourceType String
   sourceId   String
   text       String
-  embedding  String?
+  // Float[] instead of pgvector so no extension is needed; cosine similarity computed in Node
+  embedding  Float[]
   metadata   Json?
   createdAt  DateTime @default(now())
 
@@ -167,6 +170,8 @@ model Decision {
   approvals Approval[]
 
   @@index([requestId])
+  // index entityId for efficient evidence and response-building lookups
+  @@index([entityId])
   @@map("decisions")
 }
 

@@ -34,7 +34,7 @@ function parseFile(filePath: string, ext: string): unknown[] {
   return XLSX.utils.sheet_to_json(sheet);
 }
 
-function analyzeDataQuality(rows: unknown[], type: string) {
+function analyzeDataQuality(rows: unknown[], _type: string) {
   const records = rows as Record<string, unknown>[];
   if (records.length === 0) return { qualityScore: 0, duplicates: 0, missingValues: 0, staleness: 0 };
 
@@ -47,11 +47,8 @@ function analyzeDataQuality(rows: unknown[], type: string) {
     const sig = JSON.stringify(row);
     if (seen.has(sig)) duplicates++;
     seen.add(sig);
-
     for (const key of keys) {
-      if (row[key] === null || row[key] === undefined || row[key] === '') {
-        totalMissing++;
-      }
+      if (row[key] === null || row[key] === undefined || row[key] === '') totalMissing++;
     }
   }
 
@@ -68,22 +65,38 @@ function analyzeDataQuality(rows: unknown[], type: string) {
   };
 }
 
-async function ingestLeads(rows: unknown[]): Promise<number> {
+// Guard parseFloat against NaN — returns 0 for bad values
+function safeFloat(val: unknown, defaultVal = 0): number {
+  const f = parseFloat(String(val ?? ''));
+  return isNaN(f) ? defaultVal : f;
+}
+
+async function ingestLeads(rows: unknown[]): Promise<{ imported: number; skipped: number; errors: string[] }> {
   const records = rows as Record<string, unknown>[];
-  let count = 0;
+  let imported = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
   for (const row of records.slice(0, 5000)) {
     try {
-      const externalId =
-        String(row['id'] || row['lead_id'] || row['externalId'] || `L-${Date.now()}-${count}`);
+      const externalId = String(row['id'] || row['lead_id'] || row['externalId'] || `L-${Date.now()}-${imported}`);
+      const score = safeFloat(row['lead_score'] || row['leadScore'] || 0);
+      const dealValue = row['deal_value'] ? safeFloat(row['deal_value']) : null;
+
       await prisma.lead.upsert({
         where: { externalId },
         update: {
           name: String(row['name'] || row['full_name'] || 'Unknown'),
           company: String(row['company'] || row['company_name'] || ''),
           email: row['email'] ? String(row['email']) : null,
-          leadScore: parseFloat(String(row['lead_score'] || row['leadScore'] || 0)),
+          leadScore: score,
           status: String(row['status'] || 'NEW'),
-          estimatedDealValue: row['deal_value'] ? parseFloat(String(row['deal_value'])) : null,
+          estimatedDealValue: dealValue,
+          // update branch also sets optional fields
+          industry: row['industry'] ? String(row['industry']) : undefined,
+          source: row['source'] ? String(row['source']) : undefined,
+          jobTitle: row['job_title'] || row['jobTitle'] ? String(row['job_title'] || row['jobTitle']) : undefined,
+          phone: row['phone'] ? String(row['phone']) : undefined,
         },
         create: {
           externalId,
@@ -93,45 +106,154 @@ async function ingestLeads(rows: unknown[]): Promise<number> {
           phone: row['phone'] ? String(row['phone']) : null,
           jobTitle: row['job_title'] ? String(row['job_title']) : null,
           industry: row['industry'] ? String(row['industry']) : null,
-          leadScore: parseFloat(String(row['lead_score'] || row['leadScore'] || 0)),
+          leadScore: score,
           status: String(row['status'] || 'NEW'),
-          estimatedDealValue: row['deal_value'] ? parseFloat(String(row['deal_value'])) : null,
+          estimatedDealValue: dealValue,
           source: row['source'] ? String(row['source']) : null,
         },
       });
-      count++;
-    } catch {
-      // Skip invalid rows
+      imported++;
+    } catch (err) {
+      skipped++;
+      errors.push((err as Error).message.slice(0, 100));
     }
   }
-  return count;
+  return { imported, skipped, errors };
 }
 
-async function ingestNotes(rows: unknown[], sourceId: string): Promise<number> {
+async function ingestNotes(rows: unknown[], sourceId: string): Promise<{ imported: number; skipped: number; errors: string[] }> {
   const records = rows as Record<string, unknown>[];
-  let indexed = 0;
+  let imported = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
   for (const row of records.slice(0, 1000)) {
     try {
+      const content = String(row['content'] || row['note'] || row['text'] || '');
+      if (!content.trim()) { skipped++; continue; }
+
       const note = await prisma.businessNote.create({
         data: {
           entityType: 'Lead',
           entityId: String(row['entity_id'] || row['lead_id'] || sourceId),
           title: row['title'] ? String(row['title']) : null,
-          content: String(row['content'] || row['note'] || row['text'] || ''),
+          content,
           author: row['author'] ? String(row['author']) : null,
           source: 'UPLOAD',
         },
       });
-      await indexDocument('BusinessNote', note.id, note.content, {
-        entityType: note.entityType,
-        entityId: note.entityId,
-      });
-      indexed++;
-    } catch {
-      // Skip
+
+      try {
+        await indexDocument('BusinessNote', note.id, note.content, {
+          entityType: note.entityType,
+          entityId: note.entityId,
+        });
+      } catch {
+        logger.warn('Note embedded failed, saved without vector', { noteId: note.id });
+      }
+      imported++;
+    } catch (err) {
+      skipped++;
+      errors.push((err as Error).message.slice(0, 100));
     }
   }
-  return indexed;
+  return { imported, skipped, errors };
+}
+
+async function ingestDeals(rows: unknown[]): Promise<{ imported: number; skipped: number; errors: string[] }> {
+  const records = rows as Record<string, unknown>[];
+  let imported = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  for (const row of records.slice(0, 5000)) {
+    try {
+      const externalId = String(row['id'] || row['deal_id'] || row['externalId'] || `D-${Date.now()}-${imported}`);
+      await prisma.deal.upsert({
+        where: { externalId },
+        update: {
+          name: String(row['name'] || row['deal_name'] || 'Untitled Deal'),
+          stage: String(row['stage'] || 'PROSPECTING'),
+          value: safeFloat(row['value'] || row['amount'] || 0),
+        },
+        create: {
+          externalId,
+          name: String(row['name'] || row['deal_name'] || 'Untitled Deal'),
+          stage: String(row['stage'] || 'PROSPECTING'),
+          value: safeFloat(row['value'] || row['amount'] || 0),
+          probability: row['probability'] ? safeFloat(row['probability']) : null,
+        },
+      });
+      imported++;
+    } catch (err) {
+      skipped++;
+      errors.push((err as Error).message.slice(0, 100));
+    }
+  }
+  return { imported, skipped, errors };
+}
+
+async function ingestCustomers(rows: unknown[]): Promise<{ imported: number; skipped: number; errors: string[] }> {
+  const records = rows as Record<string, unknown>[];
+  let imported = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  for (const row of records.slice(0, 5000)) {
+    try {
+      const externalId = String(row['id'] || row['customer_id'] || row['externalId'] || `C-${Date.now()}-${imported}`);
+      await prisma.customer.upsert({
+        where: { externalId },
+        update: { company: String(row['company'] || row['name'] || 'Unknown') },
+        create: {
+          externalId,
+          company: String(row['company'] || row['name'] || 'Unknown'),
+          industry: row['industry'] ? String(row['industry']) : null,
+          size: row['size'] ? String(row['size']) : null,
+          status: String(row['status'] || 'ACTIVE'),
+          lifetimeValue: row['lifetime_value'] ? safeFloat(row['lifetime_value']) : null,
+        },
+      });
+      imported++;
+    } catch (err) {
+      skipped++;
+      errors.push((err as Error).message.slice(0, 100));
+    }
+  }
+  return { imported, skipped, errors };
+}
+
+// Run ingestion asynchronously; update DataSource status when done
+async function runIngestAsync(sourceId: string, type: string, rows: unknown[]): Promise<void> {
+  try {
+    let result: { imported: number; skipped: number; errors: string[] };
+
+    if (type === 'leads') result = await ingestLeads(rows);
+    else if (type === 'notes') result = await ingestNotes(rows, sourceId);
+    else if (type === 'deals') result = await ingestDeals(rows);
+    else if (type === 'customers') result = await ingestCustomers(rows);
+    else result = { imported: 0, skipped: rows.length, errors: [`Unknown type: ${type}`] };
+
+    await prisma.dataSource.update({
+      where: { id: sourceId },
+      data: {
+        status: 'ACTIVE',
+        indexed: type === 'notes',
+        rowCount: result.imported,
+        metadata: { imported: result.imported, skipped: result.skipped, errors: result.errors.slice(0, 10) } as never,
+      },
+    });
+    logger.info('Ingest complete', { sourceId, type, ...result });
+  } catch (err) {
+    await prisma.dataSource.update({
+      where: { id: sourceId },
+      data: {
+        status: 'FAILED',
+        metadata: { error: (err as Error).message } as never,
+      },
+    }).catch(() => null);
+    logger.error('Ingest failed', { sourceId, error: (err as Error).message });
+  }
 }
 
 export async function uploadData(req: Request, res: Response, next: NextFunction) {
@@ -145,7 +267,10 @@ export async function uploadData(req: Request, res: Response, next: NextFunction
     const quality = analyzeDataQuality(rows, dataType);
     const preview = rows.slice(0, 5);
 
-    // Clean up
+    // Keep parsed rows in metadata (capped to 5000) instead of deleting the file immediately
+    const cappedRows = rows.slice(0, 5000);
+
+    // Now safe to delete the temp file
     fs.unlinkSync(req.file.path);
 
     const source = await prisma.dataSource.create({
@@ -160,7 +285,8 @@ export async function uploadData(req: Request, res: Response, next: NextFunction
         staleness: quality.staleness,
         status: 'PREVIEW',
         schema: quality.schema as never,
-        metadata: { preview } as never,
+        // Store parsed rows in metadata so ingestData can use them
+        metadata: { preview, rows: cappedRows } as never,
       },
     });
 
@@ -190,15 +316,19 @@ export async function ingestData(req: Request, res: Response, next: NextFunction
     const source = await prisma.dataSource.findUnique({ where: { id: sourceId } });
     if (!source) throw createError('Data source not found', 404, 'SOURCE_NOT_FOUND');
 
-    await prisma.dataSource.update({
-      where: { id: sourceId },
-      data: { status: 'INGESTING' },
-    });
+    const meta = source.metadata as { rows?: unknown[] } | null;
+    const rows = meta?.rows || [];
 
-    logger.info('Data ingestion started', { sourceId, type: source.type });
+    await prisma.dataSource.update({ where: { id: sourceId }, data: { status: 'INGESTING' } });
 
-    // Async ingest
-    res.json({ success: true, message: 'Ingestion started', data: { sourceId } });
+    logger.info('Data ingestion started', { sourceId, type: source.type, rowCount: rows.length });
+
+    // Run ingest in background; response is returned immediately
+    runIngestAsync(sourceId, source.type, rows).catch((err) =>
+      logger.error('Background ingest error', { error: (err as Error).message })
+    );
+
+    res.json({ success: true, message: 'Ingestion started', data: { sourceId, rowCount: rows.length } });
   } catch (err) {
     next(err);
   }
@@ -206,9 +336,7 @@ export async function ingestData(req: Request, res: Response, next: NextFunction
 
 export async function getDataSources(req: Request, res: Response, next: NextFunction) {
   try {
-    const sources = await prisma.dataSource.findMany({
-      orderBy: { createdAt: 'desc' },
-    });
+    const sources = await prisma.dataSource.findMany({ orderBy: { createdAt: 'desc' } });
     res.json({ success: true, data: sources });
   } catch (err) {
     next(err);

@@ -256,9 +256,8 @@ export async function getLeadEngagement(leadId: string) {
 
   const sentimentScores = interactions
     .filter((i) => i.sentiment)
-    .map((i) =>
-      i.sentiment === 'POSITIVE' ? 1 : i.sentiment === 'NEGATIVE' ? -1 : 0
-    );
+    // Cast to number[] so reduce works correctly — TypeScript infers (0 | 1 | -1)[] otherwise
+    .map((i) => (i.sentiment === 'POSITIVE' ? 1 : i.sentiment === 'NEGATIVE' ? -1 : 0) as number);
   const avgSentiment =
     sentimentScores.length > 0
       ? sentimentScores.reduce((a, b) => a + b, 0) / sentimentScores.length
@@ -299,6 +298,7 @@ export async function getDashboardSummary() {
     pendingApprovals,
     totalDecisions,
     staleLeads,
+    latestEval,
   ] = await Promise.all([
     prisma.lead.count(),
     prisma.deal.count({ where: { stage: { notIn: ['CLOSED_WON', 'CLOSED_LOST'] } } }),
@@ -310,6 +310,8 @@ export async function getDashboardSummary() {
         status: { in: ['ACTIVE', 'QUALIFIED'] },
       },
     }),
+    // Fetch latest evaluation run to compute evidence coverage
+    prisma.evaluationRun.findFirst({ orderBy: { createdAt: 'desc' }, select: { evidenceCoverage: true } }),
   ]);
 
   const pipeline = await getPipelineSummary();
@@ -323,7 +325,8 @@ export async function getDashboardSummary() {
     staleRecords: staleLeads,
     pendingApprovals,
     decisionsGenerated: totalDecisions,
-    evidenceCoverage: 0.94, // computed from last evaluation
+    // evidenceCoverage derived from latest evaluation run, not hardcoded
+    evidenceCoverage: latestEval?.evidenceCoverage ?? null,
     leadsBySource: leadStats.bySource,
     leadsByStatus: leadStats.byStatus,
     pipeline,

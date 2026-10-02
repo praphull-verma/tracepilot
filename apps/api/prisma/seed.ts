@@ -3,14 +3,26 @@ import { logger } from '../src/utils/logger';
 
 const prisma = new PrismaClient();
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── Seeded PRNG (Mulberry32) — reproducible demo data ──────────────────────
+// Using a seeded PRNG instead of Math.random() so re-runs produce the same data
+function mulberry32(seed: number) {
+  return function () {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const rand = mulberry32(42);
 
 function rnd(min: number, max: number) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+  return Math.floor(rand() * (max - min + 1)) + min;
 }
 
 function pick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)]!;
+  return arr[Math.floor(rand() * arr.length)]!;
 }
 
 function daysAgo(days: number): Date {
@@ -77,8 +89,7 @@ async function seedUsers() {
 
 async function seedLeads(count: number) {
   console.log(`Seeding ${count} leads...`);
-  
-  // Special demo leads with interesting properties
+
   const demoLeads = [
     {
       externalId: 'L-10001',
@@ -165,7 +176,6 @@ async function seedLeads(count: number) {
       conversionProbability: 0.58,
       location: 'Delhi',
     },
-    // Stale high-value lead
     {
       externalId: 'L-10020',
       name: 'Dev Joshi',
@@ -183,7 +193,6 @@ async function seedLeads(count: number) {
       conversionProbability: 0.45,
       location: 'Mumbai',
     },
-    // Conflicted lead
     {
       externalId: 'L-10025',
       name: 'Meera Reddy',
@@ -211,7 +220,6 @@ async function seedLeads(count: number) {
     });
   }
 
-  // Generate additional random leads
   for (let i = 0; i < count - demoLeads.length; i++) {
     const externalId = `L-${10100 + i}`;
     const daysContactAgo = pick([2, 7, 14, 21, 30, 45, 60, 90, 120, null]) as number | null;
@@ -223,24 +231,24 @@ async function seedLeads(count: number) {
           externalId,
           name: `${pick(firstNames)} ${pick(lastNames)}`,
           company: `${pick(companies)} ${i % 10 === 0 ? 'Group' : ''}`.trim(),
-          email: Math.random() > 0.1 ? `lead${i}@${pick(companies).toLowerCase().replace(/\s/g, '')}.com` : null,
-          phone: Math.random() > 0.2 ? `+91${rnd(7000000000, 9999999999)}` : null,
+          email: rand() > 0.1 ? `lead${i}@example.com` : null,
+          phone: rand() > 0.2 ? `+91${rnd(7000000000, 9999999999)}` : null,
           jobTitle: pick(jobTitles),
           industry: pick(industries),
           companySize: rnd(10, 5000),
           source: pick(sources),
           leadScore: rnd(10, 98),
           status: pick(statuses),
-          estimatedDealValue: Math.random() > 0.3 ? rnd(5000, 200000) : null,
+          estimatedDealValue: rand() > 0.3 ? rnd(5000, 200000) : null,
           lastContactedAt: daysContactAgo ? daysAgo(daysContactAgo) : null,
           lastActivityAt: daysAgo(rnd(0, 60)),
-          conversionProbability: Math.random() > 0.2 ? Math.round(Math.random() * 100) / 100 : null,
+          conversionProbability: rand() > 0.2 ? Math.round(rand() * 100) / 100 : null,
           location: pick(locations),
           assignedTo: pick(['sales@tracepilot.io', 'rep2@tracepilot.io', 'rep3@tracepilot.io']),
         },
       });
     } catch {
-      // Skip duplicates
+      // Skip duplicates silently
     }
   }
 }
@@ -258,7 +266,7 @@ async function seedCustomers(count: number) {
           company: `${pick(companies)} Customer ${i}`,
           industry: pick(industries),
           size: pick(['SMALL', 'MEDIUM', 'LARGE', 'ENTERPRISE']),
-          status: Math.random() > 0.1 ? 'ACTIVE' : 'INACTIVE',
+          status: rand() > 0.1 ? 'ACTIVE' : 'INACTIVE',
           lifetimeValue: rnd(10000, 500000),
           lastInteractionAt: daysAgo(rnd(1, 120)),
         },
@@ -272,7 +280,7 @@ async function seedCustomers(count: number) {
 async function seedDeals(count: number) {
   console.log(`Seeding ${count} deals...`);
   const leads = await prisma.lead.findMany({ take: 500, select: { id: true, externalId: true } });
-  
+
   for (let i = 0; i < count; i++) {
     const lead = pick(leads);
     const externalId = `D-${1001 + i}`;
@@ -286,7 +294,7 @@ async function seedDeals(count: number) {
           name: `Deal for ${pick(companies)}`,
           stage: pick(stages),
           value: rnd(5000, 200000),
-          probability: Math.round(Math.random() * 100) / 100,
+          probability: Math.round(rand() * 100) / 100,
           expectedCloseDate: new Date(Date.now() + rnd(-30, 180) * 24 * 60 * 60 * 1000),
         },
       });
@@ -295,7 +303,6 @@ async function seedDeals(count: number) {
     }
   }
 
-  // Add specific high-value deals for demo leads
   const demoDeals = [
     { externalId: 'D-NOVA-001', leadExternalId: 'L-10001', name: 'NovaTech Enterprise Suite', stage: 'PROPOSAL', value: 72000, probability: 0.82 },
     { externalId: 'D-APEX-001', leadExternalId: 'L-10003', name: 'Apex Analytics Platform', stage: 'NEGOTIATION', value: 58000, probability: 0.75 },
@@ -316,7 +323,7 @@ async function seedDeals(count: number) {
           stage: dd.stage,
           value: dd.value,
           probability: dd.probability,
-          expectedCloseDate: daysAgo(-30), // 30 days from now
+          expectedCloseDate: daysAgo(-30),
         },
       });
     }
@@ -326,7 +333,7 @@ async function seedDeals(count: number) {
 async function seedInteractions(count: number) {
   console.log(`Seeding ${count} interactions...`);
   const leads = await prisma.lead.findMany({ take: 200, select: { id: true } });
-  
+
   for (let i = 0; i < count; i++) {
     const lead = pick(leads);
     await prisma.interaction.create({
@@ -350,7 +357,6 @@ async function seedInteractions(count: number) {
     });
   }
 
-  // Specific demo interactions
   const novaLead = await prisma.lead.findUnique({ where: { externalId: 'L-10001' } });
   if (novaLead) {
     await prisma.interaction.createMany({
@@ -365,7 +371,6 @@ async function seedInteractions(count: number) {
 async function seedBusinessNotes() {
   console.log('Seeding business notes...');
 
-  // Demo-specific notes
   const demoNotes = [
     {
       leadExternalId: 'L-10001',
@@ -403,13 +408,20 @@ async function seedBusinessNotes() {
     },
   ];
 
+  // Index containing { leadId } in metadata so per-lead retrieval works without joins
+  const { indexDocument } = await import('../src/services/retrieval');
+
   for (const dn of demoNotes) {
     const lead = await prisma.lead.findUnique({ where: { externalId: dn.leadExternalId } });
     if (lead) {
       for (const note of dn.notes) {
-        const created = await prisma.businessNote.create({
-          data: {
+        const created = await prisma.businessNote.upsert({
+          where: { id: `demo-${dn.leadExternalId}-${note.title.replace(/\s/g, '-')}` },
+          update: { content: note.content },
+          create: {
+            id: `demo-${dn.leadExternalId}-${note.title.replace(/\s/g, '-')}`,
             entityType: 'Lead',
+            // entityId is the lead's internal id so retrieval.sourceId === lead.id
             entityId: lead.id,
             leadId: lead.id,
             title: note.title,
@@ -418,58 +430,107 @@ async function seedBusinessNotes() {
             source: note.source,
           },
         });
-        // Index for RAG
+
         try {
-          const { indexDocument } = await import('../src/services/retrieval');
           await indexDocument('BusinessNote', created.id, `${note.title}\n${note.content}`, {
             entityType: 'Lead',
+            // Store lead.id (internal) so searchNotes(filters.entityId=lead.id) matches
             entityId: lead.id,
-            leadExternalId: dn.leadExternalId,
+            leadId: lead.id,
+            externalId: dn.leadExternalId,
           });
-        } catch {
-          // Continue without vector indexing
+        } catch (err) {
+          logger.warn('Failed to embed demo note, saved without vector', {
+            note: note.title,
+            error: (err as Error).message,
+          });
         }
       }
     }
   }
 
-  // Random notes for other leads
+  // Random notes for other leads — save first, then embed all in a batch for speed
   const leads = await prisma.lead.findMany({ take: 300, select: { id: true } });
+  const allNoteTemplates = [...buyingSignalNotes, ...negativeSignalNotes, ...neutralNotes];
+  const createdNotes: { id: string; title: string; content: string; leadId: string }[] = [];
+
   for (let i = 0; i < 500; i++) {
     const lead = pick(leads);
-    const allNotes = [...buyingSignalNotes, ...negativeSignalNotes, ...neutralNotes];
-    await prisma.businessNote.create({
-      data: {
-        entityType: 'Lead',
-        entityId: lead.id,
-        leadId: lead.id,
-        title: `Note ${i + 1}`,
-        content: pick(allNotes),
-        author: pick(['Sales Rep', 'Account Manager', 'BDR', 'SDR']),
-        source: pick(['CRM', 'EMAIL', 'CALL', 'MEETING']),
-      },
-    });
+    const content = pick(allNoteTemplates);
+    try {
+      const created = await prisma.businessNote.create({
+        data: {
+          entityType: 'Lead',
+          entityId: lead.id,
+          leadId: lead.id,
+          title: `Note ${i + 1}`,
+          content,
+          author: pick(['Sales Rep', 'Account Manager', 'BDR', 'SDR']),
+          source: pick(['CRM', 'EMAIL', 'CALL', 'MEETING']),
+        },
+      });
+      createdNotes.push({ id: created.id, title: `Note ${i + 1}`, content, leadId: lead.id });
+    } catch {
+      // Skip
+    }
   }
+
+  // Batch-embed all created notes with progress logging
+  console.log(`Embedding ${createdNotes.length} notes in batches...`);
+  const BATCH = 25;
+  let embedded = 0;
+  let failed = 0;
+
+  for (let i = 0; i < createdNotes.length; i += BATCH) {
+    const batch = createdNotes.slice(i, i + BATCH);
+    await Promise.allSettled(
+      batch.map(async (n) => {
+        try {
+          await indexDocument('BusinessNote', n.id, `${n.title}\n${n.content}`, {
+            entityType: 'Lead',
+            entityId: n.leadId,
+            leadId: n.leadId,
+          });
+          embedded++;
+        } catch (err) {
+          logger.warn('Failed to embed note', { id: n.id, error: (err as Error).message });
+          failed++;
+        }
+      })
+    );
+    console.log(`  Embedded ${Math.min(i + BATCH, createdNotes.length)} / ${createdNotes.length} notes...`);
+    // Small delay between batches to stay within rate limits
+    if (i + BATCH < createdNotes.length) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+  console.log(`  Embedding complete: ${embedded} ok, ${failed} failed (saved without vector)`);
 }
 
 async function seedEvaluationCases() {
   console.log('Seeding evaluation cases...');
   const cases = [
-    { id: 'EC-001', question: 'Which lead has the highest lead score?', expectedRoute: 'SQL', category: 'SQL_SIMPLE' },
-    { id: 'EC-002', question: 'Which 5 leads should our sales team contact today?', expectedRoute: 'HYBRID', category: 'HYBRID_RANKING' },
-    { id: 'EC-003', question: 'What objections are customers mentioning most frequently?', expectedRoute: 'RAG', category: 'RAG_SIMPLE' },
-    { id: 'EC-004', question: 'How many leads are in ACTIVE status?', expectedRoute: 'SQL', category: 'SQL_SIMPLE' },
-    { id: 'EC-005', question: 'Which high-value deals are at risk?', expectedRoute: 'HYBRID', category: 'HYBRID_RISK' },
+    { id: 'EC-001', question: 'Which lead has the highest lead score?', expectedRoute: 'SQL', expectedIntent: 'STATISTICS_QUERY', category: 'SQL_SIMPLE' },
+    { id: 'EC-002', question: 'Which 5 leads should our sales team contact today?', expectedRoute: 'HYBRID', expectedIntent: 'LEAD_PRIORITIZATION', category: 'HYBRID_RANKING' },
+    { id: 'EC-003', question: 'What objections are customers mentioning most frequently?', expectedRoute: 'RAG', expectedIntent: 'NOTE_ANALYSIS', category: 'RAG_SIMPLE' },
+    { id: 'EC-004', question: 'How many leads are in ACTIVE status?', expectedRoute: 'SQL', expectedIntent: 'STATISTICS_QUERY', category: 'SQL_SIMPLE' },
+    { id: 'EC-005', question: 'Which high-value deals are at risk?', expectedRoute: 'HYBRID', expectedIntent: 'DEAL_ANALYSIS', category: 'HYBRID_RISK' },
+    { id: 'EC-006', question: 'Which customers show declining engagement?', expectedRoute: 'HYBRID', expectedIntent: 'CUSTOMER_RISK', category: 'CUSTOMER_RISK' },
+    { id: 'EC-007', question: 'Show leads with high engagement but no contact in the last 14 days.', expectedRoute: 'HYBRID', expectedIntent: 'LEAD_PRIORITIZATION', category: 'HYBRID_FILTER' },
+    { id: 'EC-008', question: 'What is the total pipeline value?', expectedRoute: 'SQL', expectedIntent: 'STATISTICS_QUERY', category: 'SQL_AGGREGATE' },
+    { id: 'EC-009', question: 'Which leads have strong buying signals in their notes?', expectedRoute: 'HYBRID', expectedIntent: 'LEAD_PRIORITIZATION', category: 'HYBRID_RAG' },
+    { id: 'EC-010', question: 'Which opportunities should be reviewed by a manager?', expectedRoute: 'HYBRID', expectedIntent: 'DEAL_ANALYSIS', category: 'HYBRID_RISK' },
   ];
 
   for (const c of cases) {
     await prisma.evaluationCase.upsert({
       where: { id: c.id },
-      update: {},
+      update: { expectedRoute: c.expectedRoute },
       create: {
         id: c.id,
         question: c.question,
         expectedRoute: c.expectedRoute,
+        expectedDecision: c.expectedIntent,
         expectedEntities: [],
         category: c.category,
         difficulty: 'MEDIUM',
@@ -540,7 +601,7 @@ async function main() {
     console.log('✅ Interactions seeded');
 
     await seedBusinessNotes();
-    console.log('✅ Business notes seeded');
+    console.log('✅ Business notes seeded (with embeddings)');
 
     await seedEvaluationCases();
     console.log('✅ Evaluation cases seeded');
@@ -550,18 +611,20 @@ async function main() {
 
     console.log('\n✨ TracePilot seed complete!');
     console.log('\n📊 Seeded:');
-    const [leads, customers, deals, interactions, notes] = await Promise.all([
+    const [leads, customers, deals, interactions, notes, embedDocs] = await Promise.all([
       prisma.lead.count(),
       prisma.customer.count(),
       prisma.deal.count(),
       prisma.interaction.count(),
       prisma.businessNote.count(),
+      prisma.embeddingDocument.count(),
     ]);
     console.log(`  Leads: ${leads}`);
     console.log(`  Customers: ${customers}`);
     console.log(`  Deals: ${deals}`);
     console.log(`  Interactions: ${interactions}`);
     console.log(`  Business Notes: ${notes}`);
+    console.log(`  Embedding Documents: ${embedDocs}`);
   } catch (err) {
     console.error('Seed failed:', err);
     throw err;

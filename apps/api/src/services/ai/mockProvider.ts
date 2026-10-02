@@ -1,9 +1,9 @@
-import { LLMProvider, LLMGenerateOptions, LLMStructuredOptions } from './llmProvider';
+import { LLMProvider, LLMGenerateOptions, LLMStructuredOptions, EmbeddingTaskType } from './llmProvider';
 import { logger } from '../../utils/logger';
 
 /**
- * Deterministic mock LLM provider for demo/test mode.
- * Returns structured responses for known query patterns.
+ * Deterministic mock LLM provider for offline/test mode.
+ * Classifies based on question text keywords, not on prompt structure keywords.
  */
 export class MockLLMProvider implements LLMProvider {
   async generate(options: LLMGenerateOptions): Promise<string> {
@@ -19,17 +19,20 @@ export class MockLLMProvider implements LLMProvider {
     return options.schema.parse(raw);
   }
 
-  async embed(text: string): Promise<number[]> {
-    // Deterministic pseudo-embedding based on text hash
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async embed(text: string, _taskType?: EmbeddingTaskType): Promise<number[]> {
+    // Deterministic pseudo-embedding so cosine search still works offline
     return this.deterministicEmbedding(text);
   }
 
-  async embedBatch(texts: string[]): Promise<number[][]> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async embedBatch(texts: string[], _taskType?: EmbeddingTaskType): Promise<number[][]> {
     return Promise.all(texts.map((t) => this.embed(t)));
   }
 
   private deterministicEmbedding(text: string): number[] {
-    const dim = 1536;
+    // 768 dimensions to match gemini-embedding-001 default
+    const dim = 768;
     const result: number[] = [];
     let seed = 0;
     for (let i = 0; i < text.length; i++) {
@@ -39,203 +42,135 @@ export class MockLLMProvider implements LLMProvider {
       seed = (seed * 1664525 + 1013904223) & 0x7fffffff;
       result.push((seed / 0x7fffffff) * 2 - 1);
     }
-    // Normalize
+    // Normalize to unit vector for cosine similarity
     const norm = Math.sqrt(result.reduce((s, v) => s + v * v, 0));
     return result.map((v) => v / (norm || 1));
   }
 
+  // Classify intent from the question text, not from the structural prompt wrapper
+  private detectIntent(question: string): string {
+    const q = question.toLowerCase();
+    if (q.includes('how many') || q.includes('count') || q.includes('total') || q.includes('pipeline value') || q.includes('statistic')) {
+      return 'STATISTICS_QUERY';
+    }
+    if (q.includes('objection') || q.includes('what are customers saying') || q.includes('mention') || q.includes('note') || q.includes('say')) {
+      return 'NOTE_ANALYSIS';
+    }
+    if (q.includes('churn') || q.includes('declining') || q.includes('at-risk customer') || q.includes('customer risk')) {
+      return 'CUSTOMER_RISK';
+    }
+    if (q.includes('deal') || q.includes('pipeline') || q.includes('opportunities')) {
+      return 'DEAL_ANALYSIS';
+    }
+    if (q.includes('hello') || q.includes('hi ') || q.includes('who are you') || q.includes('what is')) {
+      return 'GENERAL_QUERY';
+    }
+    if (q.includes('lead') || q.includes('contact') || q.includes('priorit') || q.includes('buying signal') || q.includes('engagement')) {
+      return 'LEAD_PRIORITIZATION';
+    }
+    return 'LEAD_PRIORITIZATION';
+  }
+
   private generateText(prompt: string): string {
-    const lower = prompt.toLowerCase();
-
-    if (lower.includes('contact today') || lower.includes('priorit')) {
-      return `Based on structured analytics and retrieved notes, here are the top 5 leads prioritized by TracePilot's scoring engine:
-
-1. **NovaTech Systems** (L-10001) — Score: 91.4 — High deal value ($72,000), 18 days since contact, strong buying signal in notes.
-2. **Apex Digital** (L-10003) — Score: 87.2 — High engagement, 14 days since contact, demo attended recently.
-3. **CloudBridge Inc.** (L-10007) — Score: 83.5 — Active deal in negotiation, 21 days since contact.
-4. **PrimeSoft Ltd.** (L-10012) — Score: 78.1 — Strong lead score, moderate engagement.
-5. **TechCore Solutions** (L-10015) — Score: 74.6 — Recent activity, value opportunity.
-
-All recommendations are based on verified evidence. Human approval required before action.`;
+    const intent = this.detectIntent(prompt);
+    switch (intent) {
+      case 'LEAD_PRIORITIZATION':
+        return 'Based on deterministic scoring, here are the top leads prioritized by score, engagement, and deal value. All recommendations require human approval.';
+      case 'DEAL_ANALYSIS':
+        return 'Pipeline analysis reveals deals across multiple stages. Overdue and stale deals are flagged for review.';
+      case 'CUSTOMER_RISK':
+        return 'Customers with no interactions in 60+ days show declining engagement signals. Review recommended.';
+      case 'NOTE_ANALYSIS':
+        return 'Business notes analysis reveals common themes including pricing objections, integration concerns, and vendor comparisons.';
+      case 'STATISTICS_QUERY':
+        return 'Statistical summary computed from the database. See the numbers above for exact counts and values.';
+      default:
+        return 'TracePilot analyzed your question using business data. Please ask a specific sales or pipeline question for evidence-backed recommendations.';
     }
-
-    if (lower.includes('churn') || lower.includes('risk') || lower.includes('declining')) {
-      return `Based on interaction patterns and customer signals, the following customers show declining engagement:
-
-1. **GlobalTech Corp** — Last interaction 67 days ago, declining sentiment trend.
-2. **Meridian Analytics** — 45-day gap, negative note detected.
-3. **Fusion Systems** — Deal paused per recent note, structured stage mismatch.
-
-Confidence reduced for customers with stale data (>60 days).`;
-    }
-
-    if (lower.includes('deal') || lower.includes('pipeline')) {
-      return `Pipeline analysis reveals 3 high-value deals at risk:
-
-1. **Deal D-1032** — $85,000 — Stage: Negotiation — Note indicates procurement pause.
-2. **Deal D-1087** — $67,000 — Expected close 45 days overdue.
-3. **Deal D-1104** — $52,000 — No activity in 38 days.
-
-Recommend immediate review and stakeholder engagement.`;
-    }
-
-    if (lower.includes('objection')) {
-      return `Most frequent objections found in business notes:
-
-1. **Pricing concerns** — 34 mentions (past 30 days)
-2. **Integration complexity** — 28 mentions
-3. **Vendor comparison** — 22 mentions
-4. **Budget cycle timing** — 19 mentions
-5. **Security/compliance** — 15 mentions
-
-Source: 118 business notes analyzed via semantic search.`;
-    }
-
-    return `TracePilot analyzed your business data and found relevant insights. The decision engine has processed structured and unstructured data to provide evidence-backed recommendations. Please review the evidence and approve recommended actions.`;
   }
 
   private generateStructuredRaw(prompt: string): unknown {
-    const lower = prompt.toLowerCase();
+    const intent = this.detectIntent(prompt);
 
-    if (lower.includes('intent') || lower.includes('route')) {
-      if (lower.includes('contact') || lower.includes('priorit') || lower.includes('leads')) {
-        return {
-          intent: 'LEAD_PRIORITIZATION',
-          route: 'HYBRID',
-          entities: ['Lead'],
-          requiredTools: ['getTopLeads', 'calculateLeadPriority', 'searchNotes', 'getLeadEngagement'],
-          confidence: 0.95,
-        };
-      }
-      if (lower.includes('deal') || lower.includes('pipeline')) {
-        return {
-          intent: 'DEAL_ANALYSIS',
-          route: 'HYBRID',
-          entities: ['Deal'],
-          requiredTools: ['getHighValueDeals', 'getPipelineSummary', 'searchNotes'],
-          confidence: 0.9,
-        };
-      }
-      if (lower.includes('objection') || lower.includes('note')) {
-        return {
-          intent: 'NOTE_ANALYSIS',
-          route: 'RAG',
-          entities: ['BusinessNote'],
-          requiredTools: ['searchNotes'],
-          confidence: 0.88,
-        };
-      }
-      if (lower.includes('how many') || lower.includes('count') || lower.includes('statistic')) {
-        return {
-          intent: 'STATISTICS_QUERY',
-          route: 'SQL',
-          entities: ['Lead', 'Deal'],
-          requiredTools: ['getLeadStatistics', 'getPipelineSummary'],
-          confidence: 0.92,
-        };
-      }
+    // Intent detection response
+    if (this.isIntentRequest(prompt)) {
+      const routeMap: Record<string, string> = {
+        STATISTICS_QUERY: 'SQL',
+        NOTE_ANALYSIS: 'RAG',
+        CUSTOMER_RISK: 'HYBRID',
+        DEAL_ANALYSIS: 'HYBRID',
+        GENERAL_QUERY: 'RAG',
+        LEAD_PRIORITIZATION: 'HYBRID',
+      };
+      const toolsMap: Record<string, string[]> = {
+        STATISTICS_QUERY: ['getLeadStatistics', 'getPipelineSummary', 'getConversionStatistics'],
+        NOTE_ANALYSIS: ['searchNotes'],
+        CUSTOMER_RISK: ['getCustomerRiskSignals', 'searchNotes'],
+        DEAL_ANALYSIS: ['getHighValueDeals', 'getPipelineSummary', 'searchNotes'],
+        GENERAL_QUERY: [],
+        LEAD_PRIORITIZATION: ['getTopLeads', 'calculateLeadPriority', 'searchNotes'],
+      };
       return {
-        intent: 'GENERAL_QUERY',
-        route: 'HYBRID',
-        entities: ['Lead'],
-        requiredTools: ['getLeadStatistics', 'searchNotes'],
-        confidence: 0.75,
+        intent,
+        route: routeMap[intent] || 'HYBRID',
+        entities: intent === 'NOTE_ANALYSIS' ? ['BusinessNote'] : intent === 'CUSTOMER_RISK' ? ['Customer'] : intent === 'DEAL_ANALYSIS' ? ['Deal'] : ['Lead'],
+        requiredTools: toolsMap[intent] || [],
+        confidence: 0.85,
+        reasoning: `Detected ${intent} based on question keywords`,
       };
     }
 
-    if (lower.includes('decision') || lower.includes('recommendation')) {
+    // Decision response — derive from candidates in the prompt rather than hardcoding
+    if (this.isDecisionRequest(prompt)) {
+      // Extract candidate IDs from the JSON blob in the prompt if present
+      const candidateMatch = prompt.match(/"id"\s*:\s*"([^"]+)"/g);
+      const candidateIds = candidateMatch
+        ? candidateMatch.slice(0, 5).map((m) => m.replace(/"id"\s*:\s*"/, '').replace('"', ''))
+        : ['L-10001', 'L-10003', 'L-10007'];
+
       return {
-        answerSummary: 'Based on evidence-backed analysis, here are the top recommendations.',
-        recommendations: [
-          {
-            entityId: 'L-10001',
-            entityName: 'NovaTech Systems',
-            action: 'CONTACT_TODAY',
-            score: 91.4,
-            reasoning: [
-              'High deal value at $72,000',
-              'Strong recent engagement (last activity 2 days ago)',
-              'Requested API integration pricing in notes',
-              '18 days since last contact — optimal follow-up window',
-            ],
-            evidenceIds: ['E-001', 'E-002', 'E-003'],
-            confidence: 0.94,
-            warnings: [],
-          },
-          {
-            entityId: 'L-10003',
-            entityName: 'Apex Digital',
-            action: 'CONTACT_TODAY',
-            score: 87.2,
-            reasoning: [
-              'Attended product demo recently',
-              'High engagement signals',
-              '14 days since last contact',
-            ],
-            evidenceIds: ['E-004', 'E-005'],
-            confidence: 0.89,
-            warnings: [],
-          },
-          {
-            entityId: 'L-10007',
-            entityName: 'CloudBridge Inc.',
-            action: 'FOLLOW_UP_SOON',
-            score: 83.5,
-            reasoning: [
-              'Active deal in negotiation stage',
-              '21 days since last contact',
-              'Deal value: $55,000',
-            ],
-            evidenceIds: ['E-006', 'E-007'],
-            confidence: 0.85,
-            warnings: ['Note mentions procurement review in progress'],
-          },
-          {
-            entityId: 'L-10012',
-            entityName: 'PrimeSoft Ltd.',
-            action: 'FOLLOW_UP_SOON',
-            score: 78.1,
-            reasoning: [
-              'Strong lead score (84)',
-              'Moderate recent engagement',
-              'High conversion probability',
-            ],
-            evidenceIds: ['E-008'],
-            confidence: 0.82,
-            warnings: [],
-          },
-          {
-            entityId: 'L-10015',
-            entityName: 'TechCore Solutions',
-            action: 'CONTACT_TODAY',
-            score: 74.6,
-            reasoning: [
-              'Recent positive interaction',
-              'Deal value: $38,000',
-              'Interest in enterprise features noted',
-            ],
-            evidenceIds: ['E-009', 'E-010'],
-            confidence: 0.78,
-            warnings: ['Some data fields are stale (45 days)'],
-          },
-        ],
-        evidenceCoverage: 0.94,
-        conflicts: [
-          {
-            leadId: 'L-10007',
-            description: 'Structured stage shows NEGOTIATION but note mentions procurement pause',
-            severity: 'MEDIUM',
-          },
-        ],
+        answerSummary:
+          'Based on deterministic scoring, here are the top priorities. Evidence is grounded in lead scores, deal values, and engagement signals. Human approval required before any action.',
+        recommendations: candidateIds.slice(0, 3).map((id, idx) => ({
+          entityId: id,
+          entityName: `Lead ${id}`,
+          action: idx === 0 ? 'CONTACT_TODAY' : idx === 1 ? 'CONTACT_TODAY' : 'FOLLOW_UP_SOON',
+          score: 80 - idx * 5,
+          reasoning: [
+            'High lead score with strong engagement signals',
+            'Deal value in active pipeline',
+            'Optimal follow-up timing window',
+          ],
+          evidenceIds: [`E-LS-${id}`, `E-DV-${id}`],
+          confidence: 0.85 - idx * 0.03,
+          warnings: [],
+        })),
+        evidenceCoverage: 0.82,
+        conflicts: [],
       };
     }
 
+    // Default fallback
     return {
       intent: 'GENERAL_QUERY',
       route: 'HYBRID',
       entities: [],
       requiredTools: [],
       confidence: 0.7,
+      reasoning: 'Default fallback',
     };
+  }
+
+  // Detect if the prompt is asking for intent classification
+  private isIntentRequest(prompt: string): boolean {
+    const lower = prompt.toLowerCase();
+    // Intent requests contain the question wrapped in quotes, not deal/lead data
+    return lower.includes('analyze this business question') || lower.includes('business question:');
+  }
+
+  // Detect if the prompt is asking for recommendations
+  private isDecisionRequest(prompt: string): boolean {
+    const lower = prompt.toLowerCase();
+    return lower.includes('scored candidates') || lower.includes('generate evidence-backed recommendations') || lower.includes('recommendation');
   }
 }

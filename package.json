@@ -10,8 +10,10 @@
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace=apps/api\" \"npm run dev --workspace=apps/web\"",
     "build": "npm run build --workspace=apps/api && npm run build --workspace=apps/web",
+    "setup": "npm run setup --workspace=apps/api",
     "seed": "npm run seed --workspace=apps/api",
     "migrate": "npm run migrate --workspace=apps/api",
+    "reindex": "npm run reindex --workspace=apps/api",
     "test": "npm run test --workspace=apps/api"
   },
   "devDependencies": {

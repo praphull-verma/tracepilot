@@ -22,15 +22,14 @@ app.use(
   })
 );
 
-// Rate limiting
-app.use(
-  '/api',
-  rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 200,
-    message: { success: false, error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
-  })
-);
+// Rate limiting — applied globally here and scoped to /api in middleware
+// Cast via unknown to avoid express-rate-limit@7 vs @types/express@4 signature mismatch
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
+});
+app.use('/api', apiLimiter as unknown as express.RequestHandler);
 
 // Body parsing
 app.use(express.json({ limit: '10mb' }));

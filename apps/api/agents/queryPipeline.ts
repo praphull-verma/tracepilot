@@ -10,7 +10,7 @@ import {
   getLeadStatistics,
   getConversionStatistics,
 } from '../services/analytics';
-import { searchNotes, searchNotesForLead } from '../services/retrieval';
+import { searchNotes, searchNotesForLead} from '../services/retrieval';
 import { calculateLeadPriority, rankLeads } from '../services/decision/scoring';
 import { calculateFreshness } from '../services/decision/freshness';
 import { detectConflicts, buildEvidence } from '../services/evidence';
@@ -672,8 +672,7 @@ async function handleLeadPrioritization(
       const recentCount = interactions.filter((i) => new Date(i.timestamp) > last30).length;
       const sentimentScores = interactions
         .filter((i) => i.sentiment)
-        // Cast to number[] so reduce works; TypeScript infers (0 | 1 | -1)[] without cast
-        .map((i) => (i.sentiment === 'POSITIVE' ? 1 : i.sentiment === 'NEGATIVE' ? -1 : 0) as number);
+        .map((i) => (i.sentiment === 'POSITIVE' ? 1 : i.sentiment === 'NEGATIVE' ? -1 : 0));
       const avgSentiment = sentimentScores.length > 0 ? sentimentScores.reduce((a, b) => a + b, 0) / sentimentScores.length : 0;
       const engScore = Math.min(recentCount / 5, 1) * 0.6 + Math.max(0, avgSentiment) * 0.4;
 
